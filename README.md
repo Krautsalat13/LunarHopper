@@ -35,7 +35,7 @@ Runs two demo scenarios (a working and a failing landing), then the full `N=1000
 
 ## Model
 
-The state is $\vec q=(x,z,\dot x,\dot z,\vartheta,\omega)$: lateral position, altitude, their rates, body tilt $\vartheta$ from vertical, and tilt rate $\omega$. Thrust $T$ acts at the base through gimbal angle $\delta$. A Newton-Euler treatment of the rigid body gives
+The state is $`\vec q=(x,z,\dot x,\dot z,\vartheta,\omega)`$: lateral position, altitude, their rates, body tilt $\vartheta$ from vertical, and tilt rate $\omega$. Thrust $T$ acts at the base through gimbal angle $\delta$. A Newton-Euler treatment of the rigid body gives
 
 $$
 m\ddot x = T\sin(\vartheta+\delta), \qquad
@@ -54,7 +54,7 @@ The vehicle is underactuated: two inputs for three degrees of freedom. Neither t
 Linearised about the vertical, near-hover condition, each loop reduces to a PD-damped double integrator:
 
 $$
-\ddot z + 2\zeta\omega_n\,\dot z + \omega_n^2\,z = 0,
+\ddot z + 2\zeta\omega_n \dot z + \omega_n^2 z = 0,
 \qquad \omega_n^2 = \frac{K_p}{m}, \qquad 2\zeta\omega_n = \frac{K_d}{m}
 $$
 
@@ -82,7 +82,7 @@ Commanded tilt and gimbal are saturated at the limits above. The engine cuts off
   <img src="figures/Figure_2.png" width="49%">
 </p>
 
-**Monte Carlo, $N=1000$** ($x_0\in[-5,5]~\mathrm{m}$, $\dot x_0\in[-2,2]~\mathrm{m/s}$, $\dot z_0\in[-3,0]~\mathrm{m/s}$, $\vartheta_0\in[-10^\circ,10^\circ]$, $\omega_0\in[-3^\circ,3^\circ]$/s): **830 (83.0%) soft landings** ($|x|<0.5~\mathrm{m}$, $|v_x|<0.5~\mathrm{m/s}$, $|v_z|<1~\mathrm{m/s}$, $|\vartheta|<5^\circ$), **882 (88.2%) within the looser acceptable tolerance**, **118 (11.8%) failures**, all out-of-tolerance touchdowns and no timeouts. Failures are driven almost entirely by touchdown tilt: large initial lateral offsets need a stronger corrective tilt than can be nulled out before landing, not by large initial tilts themselves (those correct quickly).
+**Monte Carlo, $N=1000$** ($x_0\in[-5,5]\mathrm{m}$, $\dot x_0\in[-2,2]\mathrm{m/s}$, $\dot z_0\in[-3,0]\mathrm{m/s}$, $\vartheta_0\in[-10^\circ,10^\circ]$, $\omega_0\in[-3^\circ,3^\circ]$/s): **83.0% soft landings** ($|x|<0.5\mathrm{m}$, $|v_x|<0.5\mathrm{m/s}$, $|v_z|<1\mathrm{m/s}$, $|\vartheta|<5^\circ$), **88.2% within the looser acceptable tolerance**, **11.8% failures**, all out-of-tolerance touchdowns and no timeouts. Failures are driven almost entirely by touchdown tilt: large initial lateral offsets need a stronger corrective tilt than can be nulled out before landing, not by large initial tilts themselves (those correct quickly).
 
 ## Layout
 
