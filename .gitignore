@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Regenerated on every run
+output/
+
+# OS / editor junk
+.DS_Store
+.vscode/
+.idea/
+
+# Compiled write-ups: .tex source stays tracked, LaTeX build output does not
+*.pdf
+*.aux
+*.log
+*.synctex.gz
+*.out
+*.toc
