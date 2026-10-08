@@ -5,18 +5,16 @@ __pycache__/
 venv/
 *.egg-info/
 
-# Regenerated on every run
-output/
-
 # OS / editor junk
 .DS_Store
 .vscode/
 .idea/
 
-# Compiled write-ups: .tex source stays tracked, LaTeX build output does not
-*.pdf
+# LaTeX build caches (the report PDFs and figure PDFs are tracked on purpose)
 *.aux
 *.log
-*.synctex.gz
 *.out
 *.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk

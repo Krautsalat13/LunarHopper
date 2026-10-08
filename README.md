@@ -1,95 +1,175 @@
-# Lunar Hopper: Closed-Loop Guidance & Navigation
+# Lunar Hopper: Closed-Loop Control and Navigation
 
-Tamilarasan Ketheeswaran
+A 2D descent control and navigation study for a lunar hopper. A single gimbaled
+thruster has to bring the vehicle down from 10 m and set it on a target, upright
+and slow. The code does the rigid-body dynamics with an RK4 propagator, a cascaded
+PD controller, an Extended Kalman Filter that estimates the state from noisy
+sensors, and a Monte Carlo run over random initial conditions to see how often the
+landing works.
 
-A 2D descent guidance and control study for a lunar hopper. RK4 propagator, cascaded PD guidance/control, Monte Carlo dispersion analysis. Started as a short study to build intuition for closed-loop landing guidance under uncertain initial conditions. Now growing toward optimization-based guidance, full 6-DOF attitude dynamics, and state estimation.
+## Physics
 
-## Status
-
-**Implemented:**
-- 2D planar dynamics (translation + pitch), RK4 propagator
-- Cascaded PD guidance/control (altitude → lateral → attitude), gain-scheduled
-- Monte Carlo dispersion analysis over initial conditions
-
-**Planned:**
-- Convex (fuel-optimal) powered descent guidance via lossless convexification (Açıkmeşe & Ploen, 2007), solved as a second-order cone program, with propellant use and landing dispersion compared directly against the PD baseline over the same Monte Carlo campaign
-- 6-DOF rigid-body dynamics with quaternion kinematics and a thruster/gimbal allocation layer, so the convex guidance's thrust-pointing constraint is meaningful rather than decorative
-- An Extended Kalman Filter for navigation (state knowledge is currently assumed perfect)
-
-## Setup
-
-```bash
-cd "Hopper Project"
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-## Run
-
-```bash
-python Hopper.py
-```
-
-Runs two demo scenarios (a working and a failing landing), then the full `N=1000` Monte Carlo campaign, seeded and reproducible with `seed=42` by default. Figures are written to `output/` (gitignored, regenerated on every run) and shown interactively. LaTeX rendering is used if a system install is found on `PATH`, otherwise it falls back to matplotlib's built-in mathtext.
-
-## Model
-
-The state is $`\vec q=(x,z,\dot x,\dot z,\vartheta,\omega)`$: lateral position, altitude, their rates, body tilt $\vartheta$ from vertical, and tilt rate $\omega$. Thrust $T$ acts at the base through gimbal angle $\delta$. A Newton-Euler treatment of the rigid body gives
+The state is $\vec q = (x, z, \dot x, \dot z, \vartheta, \omega)$: lateral position,
+altitude, their rates, the body tilt $\vartheta$ from vertical, and the tilt rate
+$\omega$. The thrust $T$ acts at the base of the vehicle through a gimbal angle
+$\delta$. For a rigid body this gives
 
 $$
 m\ddot x = T\sin(\vartheta+\delta), \qquad
-m\ddot z = T\cos(\vartheta+\delta)-mg, \qquad
-I\ddot\vartheta = \ell\,T\sin\delta
+m\ddot z = T\cos(\vartheta+\delta) - mg, \qquad
+I\ddot\vartheta = \ell\, T\sin\delta
 $$
 
-with $\ell=h/2$ and $I=\tfrac{1}{12}m(3r^2+h^2)$.
+with gimbal-to-centre-of-mass distance $\ell = h/2$ and moment of inertia
+$I = \frac{1}{12}m(3r^2 + h^2)$. The parameters are $m = 150$ kg, $g = 1.625$ m/s²,
+$h = 2$ m, $r = 0.25$ m. The inputs are the thrust $T \ge 0$ and the gimbal $\delta$,
+integrated with RK4 at $\Delta t = 0.01$ s from a release altitude $z_0 = 10$ m. Mass
+is held constant, so propellant depletion is not in the model.
 
-**Parameters:** $m=150~\mathrm{kg}$, $g=1.625~\mathrm{m/s^2}$, $h=2~\mathrm{m}$, $r=0.25~\mathrm{m}$. The inputs are $T\ge 0$ and $\delta$; the equations are integrated with RK4 ($\Delta t=0.01~\mathrm{s}$) from $z_0=10~\mathrm{m}$. The propagator was checked against two limits first: free fall reaches the surface at $t\approx3.51~\mathrm{s}=\sqrt{2z_0/g}$, and setting hover thrust $T=mg$ holds altitude. Propellant mass depletion isn't modeled. Vehicle mass stays constant for the whole descent.
+The vehicle is underactuated: two inputs, three degrees of freedom. Neither $T$ nor
+$\delta$ pushes the vehicle sideways on its own, so the only way to move sideways is
+to tilt the body and use the sideways part of the thrust. That coupling is the thing
+that makes the control interesting.
 
-## Controller
+Before anything else I checked the propagator against two cases with known answers.
+With the engine off the vehicle free-falls to the ground at $t = \sqrt{2 z_0 / g} =
+3.508$ s (the run reports 3.51 s, the first step after $z$ crosses zero). Holding
+hover thrust $T = mg$ keeps the altitude fixed. The engine is cut below 0.10 m, so
+the last stretch is a free fall that hits at about $\sqrt{2 g (0.1)} \approx 0.57$ m/s.
 
-The vehicle is underactuated: two inputs for three degrees of freedom. Neither the thrust $T$ nor the gimbal $\delta$ produces a horizontal force directly, so lateral motion is only possible by tilting the body and using the horizontal component of thrust. Guidance is split into three nested single-input loops: an **altitude** loop that sets the thrust to control the descent, an outer **lateral** loop that turns horizontal-position error into a commanded tilt $\vartheta_{\mathrm{cmd}}$, and a fast inner **attitude** loop that drives the body to that tilt through the gimbal, five times faster than the outer loop ($\omega_{n,\vartheta}=2.5$ vs. $\omega_{n,x}=0.5~\mathrm{rad/s}$).
+## Control
 
-Linearised about the vertical, near-hover condition, each loop reduces to a PD-damped double integrator:
+The controller is three nested PD loops. An altitude loop sets the thrust to control
+the descent. An outer lateral loop takes the horizontal-position error and turns it
+into a commanded tilt $\vartheta_{\mathrm{cmd}} = -K_{p,x}\,x - K_{d,x}\,\dot x$. A
+fast inner attitude loop drives the body to that tilt with the gimbal. The inner loop
+runs five times faster than the outer one (ω<sub>n</sub> = 2.5 against 0.5 rad/s), so
+the two can be tuned separately.
+
+Close to vertical and near hover, each loop is just a damped double integrator,
 
 $$
-\ddot z + 2\zeta\omega_n \dot z + \omega_n^2 z = 0,
-\qquad \omega_n^2 = \frac{K_p}{m}, \qquad 2\zeta\omega_n = \frac{K_d}{m}
+\ddot z + 2\zeta\omega_n\,\dot z + \omega_n^2\,z = 0,
+\qquad \omega_n^2 = \frac{K_p}{m}, \qquad 2\zeta\omega_n = \frac{K_d}{m}.
 $$
 
-The lateral and attitude loops take the identical form, but with gain prefactor $m$ replaced by $m/T$ and $I/(\ell T)$ respectively. Since that depends on instantaneous thrust, those two loops are **gain-scheduled** on $T$, while the altitude loop uses fixed gains. The altitude loop is critically damped ($\zeta=1$): even one overshoot risks hitting the ground on the way down. The lateral and attitude loops use $\zeta=0.7$ for a faster response, since their offsets need to be nulled out before touchdown.
+The lateral and attitude loops are the same but with $m$ replaced by $m/T$ and
+$I/(\ell T)$. Those depend on the current thrust, so the lateral and attitude gains
+are scheduled on $T$ to keep ω<sub>n</sub> and ζ fixed; the altitude loop keeps fixed gains.
+I use PD because dropping the derivative term leaves an undamped oscillator that never
+settles, and I leave out the integral term because the idealised model has no steady
+bias to cancel. The altitude loop is critically damped (ζ = 1), since an overshoot
+there can mean hitting the ground. The lateral and attitude loops use ζ = 0.7, where
+a small overshoot is fine and the faster response matters, since the offset has to be
+removed before touchdown.
 
-| Loop | States | Output | $\omega_n$ (rad/s) | $\zeta$ | Limits |
+| Loop | States | Output | ω<sub>n</sub> (rad/s) | ζ | Limits |
 |---|---|---|---|---|---|
-| Altitude | $z,\dot z$ | thrust $T$ | 0.5 | 1.0 | $T \ge 0$ |
-| Lateral (outer) | $x,\dot x$ | tilt cmd $\vartheta_{\mathrm{cmd}}$ | 0.5 | 0.7 | $\pm 20^\circ$ |
-| Attitude (inner) | $\vartheta,\omega$ | gimbal $\delta$ | 2.5 | 0.7 | $\pm 10^\circ$ |
+| Altitude | z, ż | thrust T | 0.5 | 1.0 | T ≥ 0 |
+| Lateral (outer) | x, ẋ | tilt cmd θ<sub>cmd</sub> | 0.5 | 0.7 | ±20° |
+| Attitude (inner) | θ, ω | gimbal δ | 2.5 | 0.7 | ±10° |
 
-Commanded tilt and gimbal are saturated at the limits above. The engine cuts off below $0.10~\mathrm{m}$ altitude, giving a final free-fall touchdown speed of $\approx 0.57~\mathrm{m/s}$.
+The commanded tilt saturates at ±20° and the gimbal at ±10°.
+
+## Navigation
+
+The controller above is given the true state, which a real vehicle does not have. The
+navigation layer adds sensors and an Extended Kalman Filter that reconstructs the four
+translational states $(x, z, \dot x, \dot z)$; attitude is taken as known. There are
+two sensors: an accelerometer read every step, which senses the thrust acceleration
+(not gravity) plus noise, and an altimeter read once every 0.2 s, which measures
+altitude plus noise.
+
+The filter keeps a mean and a covariance and updates them in two steps. The predict
+step dead-reckons on the accelerometer: it moves the mean forward with the measured
+acceleration and grows the covariance to account for the noise and the imperfect
+model. The update step runs when an altimeter fix comes in: it compares the altitude
+the filter expected with what the altimeter read, moves the mean toward the
+measurement by an amount set by the relative uncertainties, and shrinks the
+covariance.
+
+Two things matter for the results. With attitude known the dynamics and the
+measurement are both linear in the estimated state, so the EKF here is really a linear
+Kalman filter, written in the general form but no more than that. And the altimeter
+only sees altitude, so horizontal position is never measured directly. It is
+dead-reckoned from the accelerometer and drifts with any error in the initial
+velocity, which turns out to be where most of the error comes from.
 
 ## Results
 
+### Single descents
+
+<p align="center"><img src="Plots/hopper_work.png" width="92%"></p>
+
+A working case ($x_0 = 2$ m, $\vartheta_0 = 5^\circ$). The thrust sits at zero at first:
+the lander starts above the target altitude, so the altitude loop would ask for
+downward thrust, which clips to zero, and gravity does the early descent for free.
+Once the thrust comes up the gimbal tilts the body to remove the offset and only
+straightens it out once the offset is gone, so the vehicle is upright last. It touches
+down at $t = 13.5$ s with $x = +0.02$ m, $v_z = -0.58$ m/s and $\vartheta = -0.3^\circ$, a
+soft landing, and there is no overshoot in $z$.
+
+<p align="center"><img src="Plots/hopper_fail.png" width="92%"></p>
+
+A failing case ($x_0 = 20$ m, twice the release height). The commanded tilt saturates
+at -20° to recover the offset. The controller does drive $x$ back toward zero, but the
+recovery takes longer than the descent, so the lander is still leaning at touchdown
+($\vartheta \approx +20^\circ$, $v_x \approx -2.5$ m/s) and crashes. What sets the failure
+is how large an offset can be recovered in the time available, not how large the
+initial tilt is.
+
+### Monte Carlo
+
 <p align="center">
-  <img src="figures/hopper_work.png" width="49%">
-  <img src="figures/hopper_fail.png" width="49%">
+  <img src="Plots/mc_trajectories.png" width="49%">
+  <img src="Plots/mc_touchdown.png" width="49%">
 </p>
 
-**Left, working case** ($x_0=2~\mathrm{m}$, $\vartheta_0=5^\circ$): touchdown at $t=13.5~\mathrm{s}$ with $x=+0.02~\mathrm{m}$, $v_z=-0.58~\mathrm{m/s}$, $\vartheta=-0.3^\circ$, a soft landing. **Right, failing case** ($x_0=20~\mathrm{m}$): the commanded tilt saturates at $-20^\circ$ to recover the large offset, and the recovery maneuver outlasts the descent. Touchdown at $\vartheta\approx+20^\circ$, $v_x\approx-2.5~\mathrm{m/s}$: a crash.
+Over $N = 1000$ descents with dispersed initial conditions ($x_0 \in [-5, 5]$ m,
+$\dot x_0 \in [-2, 2]$ m/s, $\dot z_0 \in [-3, 0]$ m/s, $\vartheta_0 \in [-10^\circ, 10^\circ]$,
+$\omega_0 \in [-3^\circ, 3^\circ]$/s), flying on the true state gives 830 soft landings (83.0%,
+with $|x| < 0.5$ m, $|v_x| < 0.5$ m/s, $|v_z| < 1$ m/s, $|\vartheta| < 5^\circ$), 882 within
+tolerance overall (88.2%, soft or acceptable), and 118 failures (11.8%), all out-of-tolerance
+touchdowns with no timeouts. The touchdown scatter shows the lateral velocities
+staying inside $|v_x| < 1$ m/s while the failures sit at touchdown tilt above 10°. That
+tilt comes from large initial lateral offsets, not from large initial tilts: an offset
+needs a sustained tilt to null it, and that tilt is not always straightened out in time.
 
-<p align="center">
-  <img src="figures/Figure_1.png" width="49%">
-  <img src="figures/Figure_2.png" width="49%">
-</p>
+### Flying on the estimate
 
-**Monte Carlo, $N=1000$** ($x_0\in[-5,5]\mathrm{m}$, $\dot x_0\in[-2,2]\mathrm{m/s}$, $\dot z_0\in[-3,0]\mathrm{m/s}$, $\vartheta_0\in[-10^\circ,10^\circ]$, $\omega_0\in[-3^\circ,3^\circ]$/s): **83.0% soft landings** ($|x|<0.5\mathrm{m}$, $|v_x|<0.5\mathrm{m/s}$, $|v_z|<1\mathrm{m/s}$, $|\vartheta|<5^\circ$), **88.2% within the looser acceptable tolerance**, **11.8% failures**, all out-of-tolerance touchdowns and no timeouts. Failures are driven almost entirely by touchdown tilt: large initial lateral offsets need a stronger corrective tilt than can be nulled out before landing, not by large initial tilts themselves (those correct quickly).
+<p align="center"><img src="Plots/mc_perfect_vs_ekf.png" width="75%"></p>
 
-## Layout
+Running the same 1000 descents on the EKF estimate instead of the truth, the soft rate
+drops from 83.0% to 58.6% while the within-tolerance rate barely changes, 88.2% to
+84.0%. The reason is what the sensors can see. The altimeter holds the vertical channel,
+so the descent and the cutoff timing are about the same and few landings fall out of
+tolerance. Horizontal position is not measured, so it drifts, and that drift pushes
+tight soft landings into the wider acceptable band. The estimate-versus-truth run shows
+this directly: $z$, $\dot x$ and $\dot z$ track well, and only $x$ keeps a small bias.
+The filter is statistically consistent (over 300 descents the 4-state NEES is 4.0 and
+the altimeter NIS is 1.0, both inside their 95% bands), so this is not a tuning
+problem. It is the cost of never measuring horizontal position.
 
-- `Hopper.py`: dynamics, RK4 integrator, cascaded PD controller, single-run and Monte Carlo simulation/plotting.
-- `figures/`: the specific figures referenced above, static, not regenerated by the script.
-- `Lunar_Hopper_Guidance_Note.tex`: LaTeX source for a PDF write-up covering similar content in more depth (the compiled PDF isn't tracked, build it locally with `pdflatex` if you want one).
-- `output/`: figures generated by running `Hopper.py` locally, not tracked.
+## Running it
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python Hopper.py
+```
+
+`python Hopper.py` runs the propagator checks, the two example descents, the
+$N = 1000$ Monte Carlo campaign, the perfect-state-versus-EKF comparison over the same
+dispersions, and the NEES/NIS consistency check. Everything is seeded, so the numbers
+repeat. Figures go to `Plots/` as PNG (used above) and PDF, and the Monte Carlo
+touchdown tables go to `Data/` as CSV. LaTeX text rendering is used if a system install
+is on `PATH`, otherwise matplotlib's built-in mathtext is used.
+
+Dependencies: Python 3, NumPy and matplotlib (see `requirements.txt`).
+
+`Lunar_Hopper_Report.pdf` is a longer write-up of the whole study; its source is
+`Lunar_Hopper_Report.tex`.
 
 ## License
 

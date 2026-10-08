@@ -1,0 +1,7 @@
+metric,perfect_state,ekf_estimate
+N,1000,1000
+soft_pct,83.000,58.600
+within_tolerance_pct,88.200,84.000
+failure_pct,11.800,16.000
+nees_mean,3.985,
+nis_mean,1.001,
